@@ -1,0 +1,116 @@
+package require tcltest
+namespace import ::tcltest::*
+::tcltest::loadTestedCommands
+
+package require flock
+package require m2
+package require rl_json
+package require logging
+
+logging::logger ::log debug
+proc ?? args {}
+
+interp alias {} json {} ::rl_json::json
+
+# Helpers <<<
+proc testname {} { #<<<
+	for {set l [info frame]} {$l >= 0} {incr l -1} {
+		set frame	[info frame $l]
+		if {[dict exists $frame cmd] && [string match {test *} [dict get $frame cmd]]} {
+			return [lindex [dict get $frame cmd] 1]
+		}
+	}
+	error "Cannot find test eval frame"
+}
+
+#>>>
+# Setup and cleanup helpers <<<
+set ::cleanupvars	{}
+set ::cleanupobjs	{}
+
+set setup {
+	#puts stderr "[testname] creating m2"
+	m2::api2 create m2 -uri tcp://m2node
+	lappend ::cleanupobjs m2
+	#puts "setup registering ([testname])"
+	#flock register m2 test [testname]
+	#puts stderr "[testname] creating members"
+	flock members instvar members -type raven
+	lappend ::cleanupvars members
+	#flock register m2 test [testname]
+	#puts stderr "Waiting for connected"
+	m2 waitfor connected 100
+	#puts stderr "Back from connected"
+	# Delay after connected (processing events) so that the socket readable
+	# fires and we get the initial message from the node
+	if {[info coroutine] ne ""} {
+		#puts stderr "Yielding to the event loop in setup"
+		after 50 [list [info coroutine]]
+		yield
+	} else {
+		after 50 {set ::wait 1}
+		vwait ::wait
+	}
+}
+
+set cleanup {
+	after 100 {set ::wait 1}
+	vwait ::wait
+	#puts stderr "[testname] Destroying cleanupobjs: ($::cleanupobjs)"
+	foreach obj $::cleanupobjs {
+		if {[info object isa object $obj]} {
+			try {
+				$obj destroy
+			} on error {errmsg options} {
+				puts stderr "Cleanup error destroying $obj: [dict get $options -errorinfo]"
+			}
+		}
+	}
+	set ::cleanupobjs	{}
+	#puts stderr "[testname] Unsetting cleanupvars: ($::cleanupvars)"
+	unset -nocomplain obj {*}$::cleanupvars
+	set ::cleanupvars	{}
+}
+# Setup and cleanup helpers >>>
+# Helpers >>>
+
+test basic-1.1 {Connect and enumerate flock} -setup $setup -cleanup $cleanup -body { #<<<
+	lsort -dictionary [json get [json extract [flock list_members -type raven] raven]]
+} -result {bird1 bird2 bird3}
+#>>>
+test basic-1.2 {get members} -setup $setup -cleanup $cleanup -body { #<<<
+	lappend ::cleanupvars row
+	lmap row [$members get_list] {
+		dict get [$members get [lindex $row 0]] type_data service
+	}
+} -result {bird1 bird2 bird3}
+#>>>
+test basic-2.1 {Ensure requested type is returned even when no members present} -setup $setup -cleanup $cleanup -body { #<<<
+	json length [json extract [flock list_members -type seagull] seagull]
+} -result 0
+#>>>
+test basic-3.1 {Request hello} -setup $setup -cleanup $cleanup -body { #<<<
+	set id	[lindex [$members get_list] 0 0]; lappend ::cleanupvars id
+	$members req $id hello bird
+} -result "hello, bird"
+#>>>
+test basic-3.2 {Request nonesuch} -setup $setup -cleanup $cleanup -body { #<<<
+	set id	[lindex [$members get_list] 0 0]; lappend ::cleanupvars id
+	$members req $id command doesn't exist
+} -returnCodes error -match glob -result {unknown subcommand "command": must be *} -errorCode {TCL LOOKUP SUBCOMMAND command}
+#>>>
+test basic-3.3 {Request timeout} -setup $setup -cleanup $cleanup -body { #<<<
+	set id	[lindex [$members get_list] 0 0]; lappend ::cleanupvars id
+	$members req $id -timeout 0.5 longreq
+} -returnCodes error -result {Timeout waiting for response} -errorCode {FLOCK REQ_TIMEOUT}
+#>>>
+test basic-3.4 {Request serverside coro} -setup $setup -cleanup $cleanup -body { #<<<
+	set id	[lindex [$members get_list] 0 0]; lappend ::cleanupvars id
+	$members req $id -timeout 0.5 shortreq
+} -result finished
+#>>>
+
+::tcltest::cleanupTests
+return
+
+# vim: ft=tcl foldmethod=marker foldmarker=<<<,>>> ts=4 shiftwidth=4

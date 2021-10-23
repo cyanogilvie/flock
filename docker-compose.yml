@@ -1,0 +1,51 @@
+version: "3.9"
+services:
+    m2node:
+        image: cyanogilvie/m2:v0.9.16-stripped
+        ports: ["15300:5300", "15350:5350"]
+        command: m2_node -debug 0 -loglevel notice
+
+    bird1:
+        depends_on: [m2node]
+        image: cyanogilvie/m2:v0.9.16-stripped
+        volumes:
+            - ./testscripts:/testscripts
+            - ./tm:/tm
+            - /run/docker.sock:/var/run/docker.sock:ro
+        command: tclsh /testscripts/bird.tcl
+
+    bird2:
+        depends_on: [m2node]
+        image: cyanogilvie/m2:v0.9.16-stripped
+        volumes:
+            - ./testscripts:/testscripts
+            - ./tm:/tm
+            - /run/docker.sock:/var/run/docker.sock:ro
+        command: tclsh /testscripts/bird.tcl
+
+    bird3:
+        depends_on: [m2node]
+        image: cyanogilvie/m2:v0.9.16-stripped
+        volumes:
+            - ./testscripts:/testscripts
+            - ./tm:/tm
+            - /run/docker.sock:/var/run/docker.sock:ro
+        command: tclsh /testscripts/bird.tcl
+
+    bird4:
+        depends_on: [m2node]
+        image: cyanogilvie/m2:v0.9.16-stripped
+        volumes:
+            - ./testscripts:/testscripts
+            - ./tm:/tm
+            - /run/docker.sock:/var/run/docker.sock:ro
+        command: tclsh /testscripts/bird.tcl -type duck
+
+    conductor:
+        build: conductor
+        depends_on: [m2node, bird1, bird2, bird3, bird4]
+        volumes:
+            - ./testscripts:/testscripts
+            - ./tm:/tm
+
+# vim: expandtab
