@@ -49,6 +49,14 @@ namespace eval ::req {
 		yield
 		return finished
 	}
+
+	proc with_updates {} {
+		after 10 [list [info coroutine]]; yield
+		flock_req_log notice "First interim update"
+		after 19 [list [info coroutine]]; yield
+		flock_req_log warning "Second interim update"
+		return finished
+	}
 }
 
 set servicename		[json get [containerinfo] Config Labels com.docker.compose.service]

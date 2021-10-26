@@ -40,6 +40,8 @@ namespace eval ::flock {
 		}
 
 		constructor args { #<<<
+			package require dsl
+
 			namespace path [list {*}{
 				::parse_args
 				::flock
@@ -127,22 +129,48 @@ namespace eval ::flock {
 					lassign $rest seq prev_seq data
 					coroutine coro_onrequest_$seq apply [list \
 						{m2 seq prev_seq onrequest data} {
+							global _flock_req_update
+
+							set unwind_temp_jm [list apply {{m2 seq} { # jm_can the req feedback jm (if any), which isn't intended to outlive the request <<<
+								global _flock_req_update
+								if {[info exists _flock_req_update]} {
+									if {[dict exists $_flock_req_update $m2 $seq]} {
+										puts stderr "Cancelling interim response channel: [dict get $_flock_req_update $m2 $seq]"
+										$m2 jm_can [dict get $_flock_req_update $m2 $seq] ""
+										dict unset _flock_req_update $m2 $seq
+									}
+								}
+							}} $m2 $seq]
+							#>>>
+
 							try {
 								if {![info exists onrequest]} {
 									throw nack "No requests allowed on this channel"
 								}
 
 								log debug "Dispatching request [list {*}$onrequest {*}$data]"
-								uplevel #0 [list {*}$onrequest {*}$data] 
+								dsl::dsl_eval {} [string map [list %seq% [list $seq] %m2% [list $m2]] {
+									flock_req_log {lvl msg} {
+										global _flock_req_update
+										if {![info exists _flock_req_update] || ![dict exists $_flock_req_update %m2% %seq%]} {
+											dict set _flock_req_update %m2% %seq%	[%m2% unique_id]
+										}
+										%m2% pr_jm [dict get $_flock_req_update %m2% %seq%] %seq% [list log $lvl $msg]
+									}
+								}] [list uplevel #0 [list {*}$onrequest {*}$data]]
 							} on ok {res options} {
+								{*}$unwind_temp_jm 
 								$m2 ack $seq [list $res $options]
 							} trap nack errmsg {
+								{*}$unwind_temp_jm
 								$m2 nack $seq $errmsg
 							} on error {errmsg options} {
 								log error "Unhandled error serving request: [dict get $options -errorinfo]"
+								{*}$unwind_temp_jm
 								$m2 ack $seq [list $errmsg $options]
 							} finally {
 								if {![$m2 answered $seq]} {
+									{*}$unwind_temp_jm
 									$m2 nack $seq "Not answered"
 								}
 							}
@@ -481,6 +509,7 @@ namespace eval ::flock {
 		forward register_handler   dsfilter register_handler
 		forward deregister_handler dsfilter deregister_handler
 		forward get_list           dsfilter get_list {}
+		forward item2row           dsfilter item2row
 		forward get                ds get						;# TODO: change this to dsfilter once datasource_filter has "get" support
 
 		method _new_item {pool newid newrow} { #<<<
@@ -542,6 +571,25 @@ namespace eval ::flock {
 			}
 			$m2 rsj_req [dict get $item jmid] $args [list apply {{cb msg} {
 				switch -exact -- [dict get $msg type] {
+					pr_jm {
+						set rest	[lassign [dict get $msg data] op]
+						switch -exact -- $op {
+							log {
+								lassign $rest lvl msg
+								log $lvl $msg
+							}
+
+							default {
+								log error "Unexpected flock req pr_jm op: \"$op\""
+							}
+						}
+					}
+
+					jm {}
+					jm_can {
+						puts stderr "Got got flock req interim jmid can"
+					}
+
 					ack  { {*}$cb [dict get $msg data] }
 					nack {
 						catch {throw [list FLOCK REQ_NACK] [dict get $msg data]} r o
@@ -558,7 +606,7 @@ namespace eval ::flock {
 		#>>>
 		method req {id args} { #<<<
 			parse_args $args {
-				-timeout	{-default 5.0 -# {Maximum time in seconds to wait for a response}}
+				-timeout	{-default 30.0 -# {Maximum time in seconds to wait for a response}}
 				args		{-name command}
 			}
 			if {[info coroutine] ne ""} {

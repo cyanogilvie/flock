@@ -1,13 +1,13 @@
 version: "3.9"
 services:
     m2node:
-        image: cyanogilvie/m2:v0.9.16-stripped
+        image: cyanogilvie/m2:v0.9.19-stripped
         ports: ["15300:5300", "15350:5350"]
         command: m2_node -debug 0 -loglevel notice
 
     bird1:
         depends_on: [m2node]
-        image: cyanogilvie/m2:v0.9.16-stripped
+        image: cyanogilvie/m2:v0.9.19-stripped
         volumes:
             - ./testscripts:/testscripts
             - ./tm:/tm
@@ -16,7 +16,7 @@ services:
 
     bird2:
         depends_on: [m2node]
-        image: cyanogilvie/m2:v0.9.16-stripped
+        image: cyanogilvie/m2:v0.9.19-stripped
         volumes:
             - ./testscripts:/testscripts
             - ./tm:/tm
@@ -25,7 +25,7 @@ services:
 
     bird3:
         depends_on: [m2node]
-        image: cyanogilvie/m2:v0.9.16-stripped
+        image: cyanogilvie/m2:v0.9.19-stripped
         volumes:
             - ./testscripts:/testscripts
             - ./tm:/tm
@@ -34,7 +34,7 @@ services:
 
     bird4:
         depends_on: [m2node]
-        image: cyanogilvie/m2:v0.9.16-stripped
+        image: cyanogilvie/m2:v0.9.19-stripped
         volumes:
             - ./testscripts:/testscripts
             - ./tm:/tm

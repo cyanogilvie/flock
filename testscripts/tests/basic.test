@@ -7,7 +7,7 @@ package require m2
 package require rl_json
 package require logging
 
-logging::logger ::log debug
+logging::logger ::log debug -hook {lappend ::logs %level% $msg}
 proc ?? args {}
 
 interp alias {} json {} ::rl_json::json
@@ -53,6 +53,7 @@ set setup {
 	}
 	#puts stderr "[testname] members all_connected: [[$members signal_ref all_connected] explain_txt]"
 	$members waitfor all_connected 100
+	set ::logs	{}
 }
 
 set cleanup {
@@ -110,6 +111,11 @@ test basic-3.4 {Request serverside coro} -setup $setup -cleanup $cleanup -body {
 	set id	[lindex [$members get_list] 0 0]; lappend ::cleanupvars id
 	$members req $id -timeout 0.5 shortreq
 } -result finished
+#>>>
+test basic-3.5 {Request flock_req_update} -setup $setup -cleanup $cleanup -body { #<<<
+	set id	[lindex [$members get_list] 0 0]; lappend ::cleanupvars id
+	list [$members req $id -timeout 0.5 with_updates] $::logs
+} -result [list finished {notice {First interim update} warning {Second interim update}}]
 #>>>
 
 ::tcltest::cleanupTests
