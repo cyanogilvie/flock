@@ -510,6 +510,7 @@ namespace eval ::flock {
 		forward deregister_handler dsfilter deregister_handler
 		forward get_list           dsfilter get_list {}
 		forward item2row           dsfilter item2row
+		forward extract_id         dsfilter extract_id
 		forward get                ds get						;# TODO: change this to dsfilter once datasource_filter has "get" support
 
 		method _new_item {pool newid newrow} { #<<<
@@ -586,9 +587,7 @@ namespace eval ::flock {
 					}
 
 					jm {}
-					jm_can {
-						puts stderr "Got got flock req interim jmid can"
-					}
+					jm_can {}
 
 					ack  { {*}$cb [dict get $msg data] }
 					nack {
