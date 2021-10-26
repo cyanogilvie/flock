@@ -14,6 +14,11 @@ namespace eval ::flock {
 	}
 
 	variable base_ds	{}
+	variable signals
+
+	if {![info exists signals]} {
+		array set signals {}
+	}
 
 	if {[llength [info commands ::log]] == 0} {
 		# Ensure a basic logging fallback exists
@@ -173,6 +178,7 @@ namespace eval ::flock {
 	}
 
 	#>>>
+
 	proc list_members args { #<<<
 		parse_args $args {
 			-m2		{-default m2}
@@ -205,18 +211,20 @@ namespace eval ::flock {
 	#>>>
 	proc _connected_changed {m2 ds newstate} { #<<<
 		variable base_ds
+		variable signals
 		if {$newstate} {
 			# svc_avail_changed will populate
 		} else {
 			# Lost connection, remove all svcs
 			foreach row [$ds get_list {} headers] {
 				set svc	[lindex $row 0]
-				set jmid	[dict get [$ds get_full_row $svc] jmid]
+				set jmid	[dict get [$ds get $svc] jmid]
 				if {$jmid ne {}} {
 					# Record these so that the _conductor_resp can know to ignore them in the future
 					dict set base_ds $m2 orphaned_jmids $jmid 1
 				}
-				$ds remove_item [$ds get_full_row $svc]
+				$ds remove_item [$ds get $svc]
+				unset -nocomplain signals(connected,$m2,$svc)
 			}
 		}
 	}
@@ -224,9 +232,10 @@ namespace eval ::flock {
 	#>>>
 	proc _conductor_resp {m2 ds svc msg} { #<<<
 		variable base_ds
+		variable signals
 
 		try {
-			set item	[$ds get_full_row $svc]
+			set item	[$ds get $svc]
 		} trap {DATASOURCE NOT_FOUND} {errmsg options} {
 			# We hit this for the jm_can responses to flock members removed from the ds because the svc was revoked, or the m2 connection was lost
 			set item	[list svc $svc jmid {}]
@@ -266,6 +275,9 @@ namespace eval ::flock {
 			}
 			jm_can {
 				if {[dict get $msg seq] == [dict get $item jmid]} {
+					if {[info exists signals(connected,$m2,$svc)] && [info object isa object $signals(connected,$m2,$svc)]} {
+						$signals(connected,$m2,$svc) set_state false
+					}
 					$ds update_item $item [dict merge $item [list jmid {} state cancelled type_data {}]]
 				} else {
 					if {[dict exists $base_ds $m2 orphaned_jmids [dict get $msg seq]]} {
@@ -276,6 +288,9 @@ namespace eval ::flock {
 				}
 			}
 			ack {
+				if {[info exists signals(connected,$m2,$svc)] && [info object isa object $signals(connected,$m2,$svc)]} {
+					$signals(connected,$m2,$svc) set_state true
+				}
 				$ds update_item $item [dict merge $item {state connected}]
 			}
 			nack {
@@ -289,21 +304,51 @@ namespace eval ::flock {
 	}
 
 	#>>>
+	proc _ds_reconnect_conductor {m2 ds svc newstate} { #<<<
+		variable signals
+
+		if {$newstate} {
+			set item	[$ds get $svc]
+			$ds update_item $item [dict merge $item {state connected}]
+		} else {
+			set item	[$ds get $svc]
+			if {[$m2 svc_avail $svc]} {
+				$m2 req $svc conductor [list ::flock::_conductor_resp $m2 $ds $svc]
+				$ds update_item $item [dict merge $item {state connecting}]
+			} else {
+				$ds update_item $item [dict merge $item {state lost_connection}]
+			}
+		}
+	}
+
+	#>>>
 	proc _ds_connect {m2 ds svc} { #<<<
+		variable signals
 		lassign $svc - type id
-		$ds add_item [list svc $svc type $type id $id jmid {} state connecting type_data {}]
-		$m2 req $svc conductor [list ::flock::_conductor_resp $m2 $ds $svc]
+
+		if {[info exists signals(connected,$m2,$svc)]} {
+			error "Already have a connected signal instance for m2: ($m2), svc: ($svc)"
+		}
+
+		sop::signal new signals(connected,$m2,$svc) -name "connected_$svc"
+
+		$ds add_item [list svc $svc type $type id $id jmid {} state init type_data {} sig $signals(connected,$m2,$svc)]
+
+		$signals(connected,$m2,$svc) attach_output [list ::flock::_ds_reconnect_conductor $m2 $ds $svc]
+
 	}
 
 	#>>>
 	proc _ds_disconnect {m2 ds svc} { #<<<
-		set item	[$ds get_full_row $svc]
+		variable signals
+		set item	[$ds get $svc]
 		if {[dict exists $item jmid] && [dict get $item jmid] ne {}} {
 			if {[$m2 signal_state connected]} {
 				# TODO: save prev_seq to supply here?
 				$m2 jm_disconnect [dict get $item jmid]
 			}
 		}
+		unset -nocomplain signals(connected,$m2,$svc)
 		$ds remove_item $item
 	}
 
@@ -322,7 +367,7 @@ namespace eval ::flock {
 	proc _ds_ref m2 { #<<<
 		variable base_ds
 		if {![dict exists $base_ds $m2]} {
-			set ds	[ds::dslist new -headers {svc type id jmid state type_data} -id_column 0]
+			set ds	[ds::dslist new -headers {svc type id jmid state type_data sig} -id_column 0]
 
 			[$m2 domino_ref svc_avail_changed] attach_output [list ::flock::_svc_avail_changed $m2 $ds]
 			[$m2 signal_ref connected]         attach_output [list ::flock::_connected_changed $m2 $ds]
@@ -360,16 +405,20 @@ namespace eval ::flock {
 	}
 
 	#>>>
+
 	gc_class create members { #<<<
+		superclass ::sop::signalsource
+
 		variable {*}{
 			m2
 			base_ds
 			ds
+			signals
 		}
 
 		constructor args { #<<<
-			package require datasource
-			package require cflib
+			package require datasource 0.2.4
+			package require cflib 1.15.1
 			namespace path [list {*}{
 				::parse_args
 				::rl_json
@@ -383,6 +432,7 @@ namespace eval ::flock {
 			set m2	[uplevel 1 [list namespace which -command $m2]]
 
 			set base_ds	[::flock::_ds_ref $m2]
+			interp alias {} [namespace current]::ds {} $base_ds
 
 			if {[info exists type]} {
 				ds::datasource_filter create dsfilter \
@@ -390,8 +440,22 @@ namespace eval ::flock {
 					-filter "\[dict get \$row type\] eq \"[string map [list "\"" "\\\"" "\\" "\\\\"] $type]\""
 				set ds	[namespace which -command dsfilter]
 			} else {
-				set ds	$base_ds
+				ds::datasource_filter create dsfilter -ds $base_ds
+				set ds	[namespace which -command dsfilter]
 			}
+
+			array set signals	{}
+
+			sop::gate new signals(all_connected) -mode and -default 1 -name "all_connected"
+			foreach row [my get_list] {
+				set svc		[dsfilter extract_id $row]
+				set item	[my get $svc]
+				$signals(all_connected) attach_input [dict get $item sig]
+			}
+
+			$ds register_handler new_item		[namespace code {my _new_item}]
+			$ds register_handler update_item	[namespace code {my _update_item}]
+			$ds register_handler remove_item	[namespace code {my _remove_item}]
 
 			#$ds register_handler new_item		[namespace code {my _report add}]
 			#$ds register_handler change_item	[namespace code {my _report update}]
@@ -413,6 +477,42 @@ namespace eval ::flock {
 		}
 
 		#>>>
+
+		forward register_handler   dsfilter register_handler
+		forward deregister_handler dsfilter deregister_handler
+		forward get_list           dsfilter get_list {}
+		forward get                ds get						;# TODO: change this to dsfilter once datasource_filter has "get" support
+
+		method _new_item {pool newid newrow} { #<<<
+			set newitem	[dsfilter item2row $newrow]
+			if {[info object isa object [dict get $newitem sig]]} {
+				$signals(all_connected) attach_input [dict get $newitem sig]
+			}
+		}
+
+		#>>>
+		method _update_item {pool oldid oldrow newrow} { #<<<
+			set olditem	[dsfilter item2row $oldrow]
+			set newitem	[dsfilter item2row $newrow]
+			if {[dict get $olditem sig] ne [dict get $newitem sig]} {
+				if {[info object isa object [dict get $olditem sig]]} {
+					$signals(all_connected) detach_input [dict get $olditem sig]
+				}
+				if {[info object isa object [dict get $newitem sig]]} {
+					$signals(all_connected) attach_input [dict get $newitem sig]
+				}
+			}
+		}
+
+		#>>>
+		method _remove_item {pool oldid oldrow} { #<<<
+			set olditem	[dsfilter item2row $oldrow]
+			if {[info object isa object [dict get $olditem sig]]} {
+				$signals(all_connected) detach_output [dict get $olditem sig]
+			}
+		}
+
+		#>>>
 		method _report {what args} { # DEBUG <<<
 			switch -- $what {
 				add {
@@ -431,17 +531,6 @@ namespace eval ::flock {
 					log debug "Unhandled _report case: \"$what\""
 				}
 			}
-		}
-
-		#>>>
-		method get id { #<<<
-			#log debug "members get [list $id], get_list:\n\t[join [$ds get_list {}] \n\t]"
-			$base_ds get $id	;# TODO: change this to $ds once datasource_filter has "get" support
-		}
-
-		#>>>
-		method get_list {} { #<<<
-			$ds get_list {}
 		}
 
 		#>>>

@@ -1,5 +1,5 @@
 DESTDIR=/usr/local
-VER=0.2
+VER=0.3
 
 all: tm
 

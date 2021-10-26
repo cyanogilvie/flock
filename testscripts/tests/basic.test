@@ -51,6 +51,8 @@ set setup {
 		after 50 {set ::wait 1}
 		vwait ::wait
 	}
+	#puts stderr "[testname] members all_connected: [[$members signal_ref all_connected] explain_txt]"
+	$members waitfor all_connected 100
 }
 
 set cleanup {
