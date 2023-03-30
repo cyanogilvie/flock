@@ -1,4 +1,5 @@
-DESTDIR=/usr/local
+DESTDIR=
+PREFIX=/usr/local
 VER=0.6
 
 all: tm
@@ -16,8 +17,8 @@ clean:
 	-rm -rf tm/flock-*.tm
 
 install: tm
-	mkdir -p $(DESTDIR)/lib/tcl8/site-tcl
-	cp tm/* $(DESTDIR)/lib/tcl8/site-tcl/
+	mkdir -p $(DESTDIR)$(PREFIX)/lib/tcl8/site-tcl
+	cp tm/* $(DESTDIR)$(PREFIX)/lib/tcl8/site-tcl/
 
 test: tm
 	docker-compose run --rm conductor test TESTFLAGS="$(TESTFLAGS)"
